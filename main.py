@@ -24,7 +24,7 @@ def main():
     print("Capturing satellite images finished!")
     
     # 開始模擬實驗
-    num_experiments = 10
+    num_experiments = 2
     for i in range(num_experiments):
         print(f"Running experiment {i}...")
         experiment_dir = f"data/{i}"

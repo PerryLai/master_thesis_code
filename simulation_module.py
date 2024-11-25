@@ -4,6 +4,7 @@ import time
 import random
 import cv2
 import numpy as np
+import tqdm
 
 def clear_existing_actors(world):
     """
@@ -25,9 +26,27 @@ def clear_existing_actors(world):
     print(f"Cleared {len(vehicles)} vehicles, {len(walkers)} walkers, and {len(controllers)} controllers.")
 
 def generate_simulation_data(world, experiment_id, dirname, duration=3, interval=1):
-    """
-    Generate vehicles and walkers, record their data, and capture images with feature points.
-    """
+
+    # 設置同步模擬模式
+    settings = world.get_settings()
+    settings.synchronous_mode = True
+    settings.fixed_delta_seconds = 1.0
+    settings.max_substep_delta_time = 0.05
+    settings.max_substeps = 20
+    world.apply_settings(settings)
+
+    # 嘗試多次應用設置
+    for attempt in range(30):
+        world.apply_settings(settings)
+        updated_settings = world.get_settings()
+        if updated_settings.synchronous_mode and updated_settings.fixed_delta_seconds == 1.0:
+            print("Settings applied successfully.")
+            break
+        time.sleep(0.1)  # 短暫等待重試
+    else:
+        print("Failed to apply settings after 30 attempts.")
+
+    # Generate vehicles and walkers, record their data, and capture images with feature points.
     vehicle_bp_library = world.get_blueprint_library().filter('*vehicle*')
     walker_bp_library = world.get_blueprint_library().filter('*walker*')
     spawn_points = world.get_map().get_spawn_points()
@@ -48,7 +67,7 @@ def generate_simulation_data(world, experiment_id, dirname, duration=3, interval
 
     # Generate all vehicles
     print("Starting vehicle generation...")
-    for j in range(100):  # Total 100 vehicles
+    for j in range(1):  # Total 100 vehicles
         if f"vehicle_{j}" in destroyed_vehicles:
             continue
         for attempt in range(3):  # Retry up to 3 times
@@ -71,7 +90,7 @@ def generate_simulation_data(world, experiment_id, dirname, duration=3, interval
 
     # Generate all walkers
     print("Starting walker generation...")
-    for j in range(200):  # Total 200 walkers
+    for j in range(2):  # Total 200 walkers
         if f"walker_{j}" in destroyed_walkers:
             continue
         for attempt in range(3):
@@ -105,7 +124,7 @@ def generate_simulation_data(world, experiment_id, dirname, duration=3, interval
 
     # Start simulation and recording
     print("Starting simulation...")
-    simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, walker_dir, 10, 1, destroyed_vehicles, destroyed_walkers)
+    simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, walker_dir, 3, destroyed_vehicles, destroyed_walkers)
 
     # # Clean up vehicles
     # print("Cleaning up vehicles...")
@@ -131,24 +150,28 @@ def generate_simulation_data(world, experiment_id, dirname, duration=3, interval
     #     except RuntimeError:
     #         print(f"Error cleaning up walker {walker_id}.")
 
+    # 恢復設置
+    settings.synchronous_mode = False
+    settings.fixed_delta_seconds = None
+    world.apply_settings(settings)
+    
     print("Simulation completed!")
 
-def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, walker_dir, duration, interval, destroyed_vehicles, destroyed_walkers):
+def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, walker_dir, duration, destroyed_vehicles, destroyed_walkers):
     """
-    Simulate vehicles and walkers, record their movements, and capture images.
+    結合同步模式與完整功能的模擬與數據記錄函數。
+    確保模擬中車輛和行人保持同步，每秒記錄數據並自動補充缺失對象。
     """
-    steps = duration // interval
     vehicle_bp_library = world.get_blueprint_library().filter('*vehicle*')
     spawn_points = world.get_map().get_spawn_points()
 
-    for t in range(steps):
-        world.tick()
-        time.sleep(2)
+    for t in range(duration):  # 持續模擬 `duration` 秒
+        world.tick()  # 同步模式下執行模擬步驟
+        print(f"Simulation tick {t + 1}/{duration}")
 
         # 檢查車輛是否存活，若有損失則補充
-        # 檢查車輛是否存活，若有損失則補充
         for i, (vehicle, vehicle_id) in enumerate(vehicles):
-            if not vehicle.is_alive:  # 修正此處，移除括號
+            if not vehicle.is_alive:
                 print(f"Vehicle {vehicle_id} is no longer alive. Regenerating...")
                 destroyed_vehicles.add(vehicle_id)
 
@@ -170,7 +193,6 @@ def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, wa
                     except RuntimeError as e:
                         print(f"Error spawning new vehicle for ID {vehicle_id}: {e}")
 
-
         # 更新行人位置
         for walker, walker_controller, walker_id in walkers:
             if walker_id in destroyed_walkers:
@@ -187,7 +209,7 @@ def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, wa
                 print(f"Error updating walker {walker_id}: {e}")
                 destroyed_walkers.add(walker_id)
 
-        # 紀錄車輛數據並捕獲圖像
+        # 捕捉車輛數據並記錄
         for vehicle, vehicle_id in vehicles:
             if vehicle_id in destroyed_vehicles:
                 continue
@@ -197,22 +219,23 @@ def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, wa
                     destroyed_vehicles.add(vehicle_id)
                     continue
 
-                # 紀錄車輛位置和速度數據
+                # 記錄車輛位置、速度與旋轉數據
                 location = vehicle.get_location()
                 velocity = vehicle.get_velocity()
                 rotation = vehicle.get_transform().rotation
                 with open(f"{vehicle_dir}/{vehicle_id}/info.txt", "a") as f:
-                    f.write(f"Time {t * interval}: Location: ({location.x}, {location.y}, {location.z}), "
+                    f.write(f"Time {t}: Location: ({location.x}, {location.y}, {location.z}), "
                             f"Velocity: ({velocity.x}, {velocity.y}, {velocity.z}), "
                             f"Rotation: ({rotation.pitch}, {rotation.yaw}, {rotation.roll})\n")
-                print(f"Vehicle {vehicle_id} data recorded at time {t * interval} in experiment {experiment_id}.")
-                # 捕獲圖像並檢測特徵點
-                capture_images_with_feature_points(world, vehicle, f"{vehicle_dir}/{vehicle_id}", t * interval)
+                print(f"Vehicle {vehicle_id} data recorded at time {t} in experiment {experiment_id}.")
+
+                # 捕獲 RGB 與深度影像，並保存特徵點
+                capture_images_with_feature_points(world, vehicle, f"{vehicle_dir}/{vehicle_id}", t)
             except RuntimeError as e:
-                print(f"Error operating on vehicle {vehicle_id}: {e}")
+                print(f"Error capturing data for vehicle {vehicle_id}: {e}")
                 destroyed_vehicles.add(vehicle_id)
 
-        # 紀錄行人數據
+        # 捕捉行人數據並記錄
         for walker, walker_controller, walker_id in walkers:
             if walker_id in destroyed_walkers:
                 continue
@@ -222,18 +245,18 @@ def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, wa
                     destroyed_walkers.add(walker_id)
                     continue
 
-                # 紀錄行人位置數據
+                # 記錄行人位置數據
                 location = walker.get_location()
                 with open(f"{walker_dir}/{walker_id}/info.txt", "a") as f:
-                    f.write(f"Time {t * interval}: Location: ({location.x}, {location.y}, {location.z})\n")
-                print(f"Walker {walker_id} data recorded at time {t * interval} in experiment {experiment_id}.")
+                    f.write(f"Time {t}: Location: ({location.x}, {location.y}, {location.z})\n")
+                print(f"Walker {walker_id} data recorded at time {t} in experiment {experiment_id}.")
             except RuntimeError as e:
-                print(f"Error operating on walker {walker_id}: {e}")
+                print(f"Error capturing data for walker {walker_id}: {e}")
                 destroyed_walkers.add(walker_id)
 
-    print("Simulation completed for time step.")
+    print("Simulation completed for all time steps.")
 
-
+# Process and save feature points
 def process_and_save_feature_points(rgb_image, depth_image, intrinsic, transform, dirname, timestamp):
     """
     Process RGB and depth images to extract 2D and 3D feature points
@@ -247,7 +270,7 @@ def process_and_save_feature_points(rgb_image, depth_image, intrinsic, transform
         dirname: Directory where files will be saved.
         timestamp: Timestamp for file naming.
     """
-    print("-------process_and_save_feature_points start------")
+    # print("-------process_and_save_feature_points start------")
     
     # Convert RGB image to numpy array
     rgb_array = np.array(rgb_image.raw_data).reshape((rgb_image.height, rgb_image.width, 4))[:, :, :3]
@@ -261,8 +284,8 @@ def process_and_save_feature_points(rgb_image, depth_image, intrinsic, transform
     
     # Map 2D feature points to 3D world coordinates
     feature_points_3d = []
-    print(f"intrinsic: {intrinsic}")
-    print(f"transform: {transform}")
+    # print(f"intrinsic: {intrinsic}")
+    # print(f"transform: {transform}")
     
     for x, y in feature_points_2d:
         try:
@@ -277,17 +300,27 @@ def process_and_save_feature_points(rgb_image, depth_image, intrinsic, transform
             print(f"Error processing feature point at ({x}, {y}): {e}")
 
     # Save 2D feature points
-    with open(f"{dirname}/{timestamp}_2D_FP.txt", "w") as f:
+    with open(f"{dirname}/2D_FP_{timestamp}.txt", "w") as f:
         for x, y in feature_points_2d:
             f.write(f"{x} {y}\n")
 
     # Save 3D feature points
-    with open(f"{dirname}/{timestamp}_3D_FP.txt", "w") as f:
+    with open(f"{dirname}/3D_FP_{timestamp}.txt", "w") as f:
         for x, y, z in feature_points_3d:
             f.write(f"{x} {y} {z}\n")
 
-    print(f"Feature points saved for timestamp {timestamp} in {dirname}.")
+    # print(f"Feature points saved for timestamp {timestamp} in {dirname}.")
 
+# Save depth image as grayscale
+def save_gray_depth_image(depth_image, filename):
+    """
+    Save the depth image as a grayscale image.
+    """
+    depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
+    depth_normalized = (depth_array / depth_array.max() * 255).astype(np.uint8)
+    cv2.imwrite(filename, depth_normalized)
+
+# Save depth data as .ply file
 def save_ply_file(depth_image, intrinsic, transform, ply_filename):
     """
     Generate a .ply file from a depth image.
@@ -300,30 +333,47 @@ def save_ply_file(depth_image, intrinsic, transform, ply_filename):
     """
     depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
     depth_array = depth_array * 1000.0 / 255.0  # Convert to meters
-
     points = []
-    for y in range(depth_array.shape[0]):
-        for x in range(depth_array.shape[1]):
-            depth = depth_array[y, x]
-            if depth <= 0:  # Skip invalid depths
-                continue
 
+    # for y in range(depth_array.shape[0]):
+    #     for x in range(depth_array.shape[1]):
+    #         depth = depth_array[y, x]
+    #         if depth <= 0:  # Skip invalid depths
+    #             continue
+
+    #         pixel_coords = np.array([x, y, 1.0])
+    #         camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+    #         world_coords = transform.transform(carla.Location(x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]))
+    #         points.append([world_coords.x, world_coords.y, world_coords.z])
+
+    # Write to .ply file
+    # with open(ply_filename, "w") as ply_file:
+    #     ply_file.write("ply\n")
+    #     ply_file.write("format ascii 1.0\n")
+    #     ply_file.write(f"element vertex {len(points)}\n")
+    #     ply_file.write("property float x\n")
+    #     ply_file.write("property float y\n")
+    #     ply_file.write("property float z\n")
+    #     ply_file.write("end_header\n")
+    #     for point in points:
+    #         ply_file.write(f"{point[0]} {point[1]} {point[2]}\n")
+    height, width = depth_array.shape
+    for y in range(height):
+        for x in range(width):
+            depth = depth_array[y, x]
+            if depth <= 0:
+                continue
             pixel_coords = np.array([x, y, 1.0])
             camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
             world_coords = transform.transform(carla.Location(x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]))
-            points.append([world_coords.x, world_coords.y, world_coords.z])
+            points.append(f"{world_coords.x} {world_coords.y} {world_coords.z} 255 255 255\n")
 
-    # Write to .ply file
-    with open(ply_filename, "w") as ply_file:
-        ply_file.write("ply\n")
-        ply_file.write("format ascii 1.0\n")
-        ply_file.write(f"element vertex {len(points)}\n")
-        ply_file.write("property float x\n")
-        ply_file.write("property float y\n")
-        ply_file.write("property float z\n")
-        ply_file.write("end_header\n")
-        for point in points:
-            ply_file.write(f"{point[0]} {point[1]} {point[2]}\n")
+    with open(ply_filename, "w") as f:
+        f.write("ply\nformat ascii 1.0\n")
+        f.write(f"element vertex {len(points)}\n")
+        f.write("property float x\nproperty float y\nproperty float z\n")
+        f.write("property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
+        f.writelines(points)
 
     print(f"Point cloud saved as .ply at {ply_filename}.")
 
@@ -348,7 +398,7 @@ def capture_images_with_feature_points(world, vehicle, dirname, timestamp):
         if depth_camera:
             depth_camera.destroy()
         return
-
+    
     # Containers for captured data
     rgb_image_data = []
     depth_image_data = []
@@ -356,8 +406,8 @@ def capture_images_with_feature_points(world, vehicle, dirname, timestamp):
     def save_rgb_image(image):
         rgb_image_data.append(image)
         # Save RGB image directly to disk
-        image.save_to_disk(f"{dirname}/{timestamp}_rgb.png")
-        print(f"RGB image saved at {dirname}/{timestamp}_rgb.png.")
+        image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+        print(f"RGB image saved at {dirname}/rgb_{timestamp}.png.")
 
     def save_depth_image(image):
         """
@@ -371,32 +421,39 @@ def capture_images_with_feature_points(world, vehicle, dirname, timestamp):
         depth_array_normalized = depth_array_normalized.astype(np.uint8)  # Convert to 8-bit grayscale
 
         # Save the depth image as grayscale
-        depth_image_path = f"{dirname}/{timestamp}_depth_gray.png"
+        depth_image_path = f"{dirname}/depth_{timestamp}.png"
         cv2.imwrite(depth_image_path, depth_array_normalized)
         print(f"Grayscale depth image saved at {depth_image_path}.")
 
-
     rgb_camera.listen(save_rgb_image)
     depth_camera.listen(save_depth_image)
-    time.sleep(1)  # Allow time for images to be captured
-    rgb_camera.stop()
-    depth_camera.stop()
 
-    if rgb_image_data and depth_image_data:
-        # Precompute intrinsic and transform
-        # Save grayscale depth image
-        save_depth_image(depth_image_data[0])
-        intrinsic = get_camera_intrinsic(rgb_camera)
-        transform = rgb_camera.get_transform()
+    # 等待足夠時間以確保圖像捕捉完成
+    for _ in range(10):  # 最多嘗試 10 次
+        world.tick()
+        time.sleep(0.1)
+        if rgb_image_data and depth_image_data:
+            break
+        else:
+            print(f"Failed to capture images for vehicle {dirname.split('/')[-1]} at time {timestamp}.")
+    # time.sleep(1)  # Allow time for images to be captured
+    # rgb_camera.stop()
+    # depth_camera.stop()
 
-        # Process and save feature points
-        process_and_save_feature_points(rgb_image_data[0], depth_image_data[0], intrinsic, transform, dirname, timestamp)
-    
-        # Save .ply file from depth image
-        ply_filename = f"{dirname}/{timestamp}_pointcloud.ply"
-        save_ply_file(depth_image_data[0], intrinsic, transform, ply_filename)
-    else:
-        print(f"Failed to capture images for vehicle {dirname.split('/')[-1]} at time {timestamp}.")
+    # Precompute intrinsic and transform
+    # Save grayscale depth image
+    save_depth_image(depth_image_data[0])
+    save_gray_depth_image(depth_image_data[0], f"{dirname}/depth_gray_{timestamp}.png")
+    intrinsic = get_camera_intrinsic(rgb_camera)
+    transform = rgb_camera.get_transform()
+
+    # Process and save feature points
+    process_and_save_feature_points(rgb_image_data[0], depth_image_data[0], intrinsic, transform, dirname, timestamp)
+
+    # Save .ply file from depth image
+    ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+    save_ply_file(depth_image_data[0], intrinsic, transform, ply_filename)
+
 
     # Destroy cameras
     if rgb_camera.is_alive:
@@ -404,6 +461,7 @@ def capture_images_with_feature_points(world, vehicle, dirname, timestamp):
     if depth_camera.is_alive:
         depth_camera.destroy()
 
+# Attach camera to vehicle
 def attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb'):
     """
     Attach a camera of specified type to a vehicle.
@@ -419,7 +477,6 @@ def attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb'):
     except RuntimeError as e:
         print(f"Failed to attach {camera_type} to vehicle: {e}")
         return None
-
 
 def get_camera_intrinsic(camera):
     """
@@ -454,3 +511,41 @@ def detect_feature_points(image):
     keypoints = orb.detect(gray, None)
     return [kp.pt for kp in keypoints]
 
+def simulate_and_record_sync(experiment_id, world, vehicles, walkers, vehicle_dir, walker_dir, duration):
+    """
+    在同步模式下運行模擬，確保每秒統一暫停並捕捉數據。
+    """
+    for t in range(duration):  # 模擬總時長為 `duration` 秒
+        world.tick()  # 執行模擬一步，固定步長為 1 秒
+        print(f"Simulation tick {t + 1}/{duration}")
+
+        # 捕捉車輛數據
+        for vehicle, vehicle_id in vehicles:
+            if not vehicle.is_alive:
+                print(f"Vehicle {vehicle_id} destroyed, skipping.")
+                continue
+            try:
+                location = vehicle.get_location()
+                velocity = vehicle.get_velocity()
+                rotation = vehicle.get_transform().rotation
+                with open(f"{vehicle_dir}/{vehicle_id}/info.txt", "a") as f:
+                    f.write(f"Time {t}: Location: ({location.x}, {location.y}, {location.z}), "
+                            f"Velocity: ({velocity.x}, {velocity.y}, {velocity.z}), "
+                            f"Rotation: ({rotation.pitch}, {rotation.yaw}, {rotation.roll})\n")
+                print(f"Vehicle {vehicle_id} data recorded.")
+                capture_images_with_feature_points(world, vehicle, f"{vehicle_dir}/{vehicle_id}", t)
+            except RuntimeError as e:
+                print(f"Error capturing data for vehicle {vehicle_id}: {e}")
+
+        # 捕捉行人數據
+        for walker, walker_controller, walker_id in walkers:
+            if not walker.is_alive:
+                print(f"Walker {walker_id} destroyed, skipping.")
+                continue
+            try:
+                location = walker.get_location()
+                with open(f"{walker_dir}/{walker_id}/info.txt", "a") as f:
+                    f.write(f"Time {t}: Location: ({location.x}, {location.y}, {location.z})\n")
+                print(f"Walker {walker_id} data recorded.")
+            except RuntimeError as e:
+                print(f"Error capturing data for walker {walker_id}: {e}")

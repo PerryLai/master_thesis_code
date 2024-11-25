@@ -1813,3 +1813,102 @@ def attach_rgb_camera_to_vehicle(world, vehicle):
 
 #     print(f"Feature points saved for timestamp {timestamp} in {dirname}.")
 
+# Simulate and record
+def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, walker_dir, duration, interval, destroyed_vehicles, destroyed_walkers):
+    """
+    Simulate vehicles and walkers, record their movements, and capture images.
+    """
+    steps = duration // interval
+    vehicle_bp_library = world.get_blueprint_library().filter('*vehicle*')
+    spawn_points = world.get_map().get_spawn_points()
+
+    for t in range(steps):
+
+        world.tick()
+        time.sleep(2)
+
+        # 檢查車輛是否存活，若有損失則補充
+        for i, (vehicle, vehicle_id) in enumerate(vehicles):
+            if not vehicle.is_alive:  # 修正此處，移除括號
+                print(f"Vehicle {vehicle_id} is no longer alive. Regenerating...")
+                destroyed_vehicles.add(vehicle_id)
+
+                # 嘗試生成新車輛並替代損失車輛
+                for attempt in range(3):
+                    try:
+                        spawn_point = random.choice(spawn_points)
+                        blueprint = random.choice(vehicle_bp_library)
+                        new_vehicle = world.try_spawn_actor(blueprint, spawn_point)
+                        if new_vehicle:
+                            new_vehicle.set_autopilot(True)
+                            print(f"New vehicle generated with ID {vehicle_id} at spawn point {spawn_point}.")
+                            vehicles[i] = (new_vehicle, vehicle_id)
+                            os.makedirs(f"{vehicle_dir}/{vehicle_id}", exist_ok=True)
+                            break
+                        else:
+                            print(f"Failed to spawn new vehicle for ID {vehicle_id}. Retrying...")
+                            time.sleep(2)
+                    except RuntimeError as e:
+                        print(f"Error spawning new vehicle for ID {vehicle_id}: {e}")
+
+        # 更新行人位置
+        for walker, walker_controller, walker_id in walkers:
+            if walker_id in destroyed_walkers:
+                continue
+            try:
+                if not walker.is_alive:
+                    print(f"Walker {walker_id} destroyed, skipping.")
+                    destroyed_walkers.add(walker_id)
+                    continue
+
+                # 移動行人
+                walker_controller.go_to_location(world.get_random_location_from_navigation())
+            except RuntimeError as e:
+                print(f"Error updating walker {walker_id}: {e}")
+                destroyed_walkers.add(walker_id)
+
+        # 紀錄車輛數據並捕獲圖像
+        for vehicle, vehicle_id in vehicles:
+            if vehicle_id in destroyed_vehicles:
+                continue
+            try:
+                if not vehicle.is_alive:
+                    print(f"Vehicle {vehicle_id} destroyed, skipping.")
+                    destroyed_vehicles.add(vehicle_id)
+                    continue
+
+                # 紀錄車輛位置和速度數據
+                location = vehicle.get_location()
+                velocity = vehicle.get_velocity()
+                rotation = vehicle.get_transform().rotation
+                with open(f"{vehicle_dir}/{vehicle_id}/info.txt", "a") as f:
+                    f.write(f"Time {t * interval}: Location: ({location.x}, {location.y}, {location.z}), "
+                            f"Velocity: ({velocity.x}, {velocity.y}, {velocity.z}), "
+                            f"Rotation: ({rotation.pitch}, {rotation.yaw}, {rotation.roll})\n")
+                print(f"Vehicle {vehicle_id} data recorded at time {t * interval} in experiment {experiment_id}.")
+                # 捕獲圖像並檢測特徵點
+                capture_images_with_feature_points(world, vehicle, f"{vehicle_dir}/{vehicle_id}", t * interval)
+            except RuntimeError as e:
+                print(f"Error operating on vehicle {vehicle_id}: {e}")
+                destroyed_vehicles.add(vehicle_id)
+
+        # 紀錄行人數據
+        for walker, walker_controller, walker_id in walkers:
+            if walker_id in destroyed_walkers:
+                continue
+            try:
+                if not walker.is_alive:
+                    print(f"Walker {walker_id} destroyed, skipping.")
+                    destroyed_walkers.add(walker_id)
+                    continue
+
+                # 紀錄行人位置數據
+                location = walker.get_location()
+                with open(f"{walker_dir}/{walker_id}/info.txt", "a") as f:
+                    f.write(f"Time {t * interval}: Location: ({location.x}, {location.y}, {location.z})\n")
+                print(f"Walker {walker_id} data recorded at time {t * interval} in experiment {experiment_id}.")
+            except RuntimeError as e:
+                print(f"Error operating on walker {walker_id}: {e}")
+                destroyed_walkers.add(walker_id)
+
+    print("Simulation completed for time step.")
