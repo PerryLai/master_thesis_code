@@ -1912,3 +1912,1073 @@ def simulate_and_record(experiment_id, world, vehicles, walkers, vehicle_dir, wa
                 destroyed_walkers.add(walker_id)
 
     print("Simulation completed for time step.")
+
+
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file):
+#     """
+#     Capture RGB and depth images, convert 2D feature points to 3D world coordinates,
+#     and match them with points in PCD_FP_town01.txt.
+
+#     Args:
+#         world: CARLA world object.
+#         vehicle: Vehicle actor to attach cameras.
+#         dirname: Directory where outputs will be saved.
+#         timestamp: Timestamp for file naming.
+#         fp_town_file: Path to PCD_FP_town01.txt containing world coordinates.
+#     """
+#     # Attach cameras
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"Skipping capture for vehicle {dirname.split('/')[-1]} at time {timestamp}: Cameras not attached.")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # Load PCD_FP_town01.txt points
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"Error loading PCD_FP_town01.txt: {e}")
+#         return
+
+#     # Containers for captured data
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+#         image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+#         # print(f"RGB image saved at {dirname}/rgb_{timestamp}.png.")
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+#         depth_array = np.array(image.raw_data, dtype=np.float32).reshape((image.height, image.width, 4))[:, :, 0]
+#         depth_array_normalized = (depth_array / np.max(depth_array) * 255.0).astype(np.uint8)
+#         depth_image_path = f"{dirname}/depth_{timestamp}.png"
+#         cv2.imwrite(depth_image_path, depth_array_normalized)
+#         # print(f"Grayscale depth image saved at {depth_image_path}.")
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # Wait for images to be captured
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # Stop listening to cameras
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"Failed to capture images for vehicle {dirname.split('/')[-1]} at time {timestamp}.")
+#     else:
+#         # Precompute intrinsic and transform
+#         intrinsic = get_camera_intrinsic(rgb_camera)
+#         transform = rgb_camera.get_transform()
+
+#         # Detect feature points in the RGB image
+#         rgb_array = np.array(rgb_image_data[0].raw_data).reshape((720, 1280, 4))[:, :, :3]
+#         detected_fp = detect_feature_points(rgb_array)
+
+#         # Convert 2D feature points to 3D world coordinates
+#         feature_points_3d = []
+#         depth_array = np.array(depth_image_data[0].raw_data, dtype=np.float32).reshape((720, 1280, 4))[:, :, 0]
+
+#         for x, y in detected_fp:
+#             try:
+#                 depth = depth_array[int(y), int(x)]
+#                 if depth <= 0:
+#                     continue  # Skip invalid depth points
+
+#                 # Convert to camera coordinates
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+
+#                 # Convert to world coordinates
+#                 world_coords = transform.transform(carla.Location(x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]))
+#                 feature_points_3d.append([world_coords.x, world_coords.y, world_coords.z])
+#             except Exception as e:
+#                 print(f"Error converting 2D FP ({x}, {y}) to 3D world coordinates: {e}")
+
+#         feature_points_3d = np.array(feature_points_3d)
+
+#         # Match converted points with PCD_FP_town01.txt
+#         match_count = sum(
+#             1 for wp in feature_points_3d
+#             if any(np.linalg.norm(wp - tp) < 5 for tp in fp_town_points)
+#         )
+
+#         if match_count >= 4:
+#             print(f"---------Image at {timestamp} satisfies conditions. Proceeding with data processing.---------")
+
+#             # Save grayscale depth image
+#             save_depth_image(depth_image_data[0])
+
+#             # Process and save feature points
+#             process_and_save_feature_points(rgb_image_data[0], depth_image_data[0], intrinsic, transform, dirname, timestamp)
+
+#             # Save .ply file from depth image
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_ply_file(depth_image_data[0], intrinsic, transform, ply_filename)
+
+#             # Estimate camera pose
+#             try:
+#                 detected_fp_array = np.array(detected_fp, dtype=np.float32)
+#                 fp_town_points_array = np.array(fp_town_points[:len(detected_fp)], dtype=np.float32)
+#                 rvec, tvec = estimate_camera_pose_2d_3d(detected_fp_array, fp_town_points_array)
+
+#                 with open(f"{dirname}/pose_{timestamp}.txt", "w") as pose_file:
+#                     pose_file.write(f"Rotation Vector: {rvec.tolist()}\n")
+#                     pose_file.write(f"Translation Vector: {tvec.tolist()}\n")
+#                 print(f"Camera pose saved at {dirname}/pose_{timestamp}.txt.")
+#             except Exception as e:
+#                 print(f"Error estimating camera pose: {e}")
+#         else:
+#             print(f"Image at {timestamp} does not satisfy conditions. Skipping.")
+
+#     # Destroy cameras
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file):
+#     """
+#     Capture RGB and depth images from a vehicle's camera, detect feature points,
+#     and save 2D/3D feature points and images to files.
+
+#     Args:
+#         world: CARLA world object.
+#         vehicle: Vehicle actor to attach cameras.
+#         dirname: Directory where outputs will be saved.
+#         timestamp: Timestamp for file naming.
+#         fp_town_file: Path to FP_town01.txt containing world coordinates of interest.
+#     """
+#     # Attach cameras
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"Skipping capture for vehicle {dirname.split('/')[-1]} at time {timestamp}: Cameras not attached.")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # Load FP_town01.txt points
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"Error loading FP_town01.txt: {e}")
+#         return
+
+#     # Containers for captured data
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+#         image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+#         # print(f"RGB image saved at {dirname}/rgb_{timestamp}.png.")
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+#         depth_array = np.array(image.raw_data, dtype=np.float32).reshape((image.height, image.width, 4))[:, :, 0]
+#         depth_array_normalized = (depth_array / np.max(depth_array) * 255.0).astype(np.uint8)
+#         depth_image_path = f"{dirname}/depth_{timestamp}.png"
+#         cv2.imwrite(depth_image_path, depth_array_normalized)
+#         # print(f"Grayscale depth image saved at {depth_image_path}.")
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # Wait for images to be captured
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # Stop listening to cameras
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"Failed to capture images for vehicle {dirname.split('/')[-1]} at time {timestamp}.")
+#     else:
+#         # Precompute intrinsic and transform
+#         intrinsic = get_camera_intrinsic(rgb_camera)
+#         transform = rgb_camera.get_transform()
+
+#         # Detect feature points in the RGB image
+#         rgb_array = np.array(rgb_image_data[0].raw_data).reshape((720, 1280, 4))[:, :, :3]
+#         detected_fp = detect_feature_points(rgb_array)
+
+#         # Check for matches with FP_town01.txt
+#         match_count = sum(
+#             1 for x, y in detected_fp
+#             if any(np.linalg.norm(fp[:2] - [x, y]) < 5 for fp in fp_town_points)
+#         )
+
+#         if match_count >= 4:
+#             print(f"---------Image at {timestamp} satisfies conditions. Proceeding with data processing.---------")
+
+#             # Save grayscale depth image
+#             save_depth_image(depth_image_data[0])
+
+#             # Process and save feature points
+#             process_and_save_feature_points(rgb_image_data[0], depth_image_data[0], intrinsic, transform, dirname, timestamp)
+
+#             # Save .ply file from depth image
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_ply_file(depth_image_data[0], intrinsic, transform, ply_filename)
+
+#             # Estimate camera pose
+#             try:
+#                 detected_fp_array = np.array(detected_fp, dtype=np.float32)
+#                 fp_town_points_array = np.array(fp_town_points[:len(detected_fp)], dtype=np.float32)
+#                 rvec, tvec = estimate_camera_pose_2d_3d(detected_fp_array, fp_town_points_array)
+
+#                 with open(f"{dirname}/pose_{timestamp}.txt", "w") as pose_file:
+#                     pose_file.write(f"Rotation Vector: {rvec.tolist()}\n")
+#                     pose_file.write(f"Translation Vector: {tvec.tolist()}\n")
+#                 print(f"Camera pose saved at {dirname}/pose_{timestamp}.txt.")
+#             except Exception as e:
+#                 print(f"Error estimating camera pose: {e}")
+#         else:
+#             print(f"Image at {timestamp} does not satisfy conditions. Skipping.")
+
+#     # Destroy cameras
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+
+# def process_actor_for_fp_and_pointcloud(world, actor, dirname, timestamp, fp_town_points, actor_type, vehicle_id=None):
+#     """
+#     處理單個車輛的深度影像捕捉、點雲生成和特徵點比對。
+#     """
+#     # 深度相機捕捉
+#     depth_camera = attach_camera_to_vehicle(world, actor, camera_type='sensor.camera.depth')
+#     if not depth_camera:
+#         print(f"{actor_type} {vehicle_id} 無法附加深度相機，跳過處理。")
+#         return
+
+#     depth_image_data = []
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+#         depth_array = np.array(image.raw_data, dtype=np.float32).reshape((image.height, image.width, 4))[:, :, 0]
+#         depth_array_normalized = (depth_array / np.max(depth_array) * 255.0).astype(np.uint8)
+#         depth_image_path = f"{dirname}/depth_{timestamp}.png"
+#         cv2.imwrite(depth_image_path, depth_array_normalized)
+#         # print(f"灰階深度影像已保存於 {depth_image_path}。")
+
+#     depth_camera.listen(save_depth_image)
+
+#     # 等待影像捕捉完成
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if depth_image_data:
+#             break
+
+#     depth_camera.stop()
+
+#     if not depth_image_data:
+#         print(f"未捕捉到深度影像，跳過 {actor_type} {vehicle_id} 的處理。")
+#         # depth_camera.destroy()
+#     else:
+#         depth_image = depth_image_data[0]
+#         intrinsic = get_camera_intrinsic(depth_camera)
+#         transform = depth_camera.get_transform()
+
+
+#         # 將深度影像轉換為點雲
+#         depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
+#         points = []
+
+#         for y in range(depth_array.shape[0]):
+#             for x in range(depth_array.shape[1]):
+#                 depth = depth_array[y, x]
+#                 if depth <= 0:
+#                     continue
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+#                 world_coords = transform.transform(carla.Location(x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]))
+#                 points.append([int(world_coords.x), int(world_coords.y), int(world_coords.z)])
+
+#         points = np.array(points)
+
+#         # 與特徵點比對
+#         matched_points = []
+#         for point in points:
+#             distances = np.linalg.norm(fp_town_points - point, axis=1)
+#             if np.any(distances < 0.01):  # 距離閾值
+#                 matched_points.append(point)
+
+#         if len(matched_points) > 4:
+#             print(f"{actor_type} {vehicle_id} 在時間 {timestamp} 的深度影像包含至少 4 個特徵點，符合條件。")
+
+#             # 保存點雲
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_pointcloud_to_ply(points, ply_filename)
+
+#             # 保存特徵點
+#             matched_txt_filename = f"{dirname}/FP_{timestamp}.txt"
+#             np.savetxt(matched_txt_filename, matched_points, fmt="%d", delimiter=" ")
+
+#             # 計算重心
+#             centroid = np.mean(matched_points, axis=0)
+#             with open(matched_txt_filename, "a") as f:
+#                 f.write(f"重心: {centroid[0]:.2f} {centroid[1]:.2f} {centroid[2]:.2f}\n")
+#             print(f"重心座標: {centroid}")
+
+#             # 切換到 RGB 相機並捕捉 RGB 影像
+#             rgb_camera = attach_camera_to_vehicle(world, actor, camera_type='sensor.camera.rgb')
+#             if rgb_camera:
+#                 rgb_image_data = []
+
+#                 def save_rgb_image(image):
+#                     rgb_image_data.append(image)
+
+#                 rgb_camera.listen(save_rgb_image)
+#                 world.tick()
+#                 time.sleep(0.5)  # 確保影像捕捉完成
+#                 rgb_camera.stop()
+
+#                 if rgb_image_data:
+#                     rgb_image = rgb_image_data[0]
+#                     rgb_image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+#                     print(f"{actor_type} {vehicle_id} 在時間 {timestamp} 的 RGB 影像已保存。")
+
+#                 rgb_camera.destroy()
+
+#         else:
+#             print(f"{actor_type} {vehicle_id} 在時間 {timestamp} 的深度影像不符合條件，跳過。")
+
+#     # 銷毀相機
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file):
+#     """
+#     捕捉 RGB 和深度影像，將 2D 特徵點轉換為 3D 世界座標，
+#     並與 PCD_FP_town01.txt 中的點進行匹配。
+
+#     Args:
+#         world: CARLA 世界對象。
+#         vehicle: 要附加相機的車輛。
+#         dirname: 輸出檔案保存的目錄。
+#         timestamp: 檔案命名的時間戳。
+#         fp_town_file: 包含世界座標的 PCD_FP_town01.txt 的路徑。
+#     """
+#     # 附加相機
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"跳過 {dirname.split('/')[-1]} 在時間 {timestamp} 的捕捉：未附加相機。")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # 加載 PCD_FP_town01.txt 中的點
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"載入 PCD_FP_town01.txt 錯誤：{e}")
+#         return
+
+#     # 用於捕捉數據的容器
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+#         image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+#         # print(f"RGB 影像已保存於 {dirname}/rgb_{timestamp}.png。")
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+#         depth_array = np.array(image.raw_data, dtype=np.float32).reshape((image.height, image.width, 4))[:, :, 0]
+#         depth_array_normalized = (depth_array / np.max(depth_array) * 255.0).astype(np.uint8)
+#         depth_image_path = f"{dirname}/depth_{timestamp}.png"
+#         cv2.imwrite(depth_image_path, depth_array_normalized)
+#         # print(f"灰階深度影像已保存於 {depth_image_path}。")
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # 等待影像捕捉完成
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # 停止監聽相機
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"未能捕捉到 {dirname.split('/')[-1]} 在時間 {timestamp} 的影像。")
+#     else:
+#         # 預計算相機內參與轉換
+#         intrinsic = get_camera_intrinsic(rgb_camera)
+#         transform = rgb_camera.get_transform()
+
+#         # 在 RGB 影像中檢測特徵點
+#         rgb_array = np.array(rgb_image_data[0].raw_data).reshape((720, 1280, 4))[:, :, :3]
+#         detected_fp = detect_feature_points(rgb_array)
+
+#         # 將 2D 特徵點轉換為 3D 世界座標
+#         feature_points_3d = []
+#         depth_array = np.array(depth_image_data[0].raw_data, dtype=np.float32).reshape((720, 1280, 4))[:, :, 0]
+
+#         for x, y in detected_fp:
+#             try:
+#                 depth = depth_array[int(y), int(x)]
+#                 if depth <= 0:
+#                     continue  # 跳過無效深度點
+
+#                 # 轉換為相機座標
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+
+#                 # 轉換為世界座標
+#                 world_coords = transform.transform(carla.Location(x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]))
+#                 feature_points_3d.append([world_coords.x, world_coords.y, world_coords.z])
+#             except Exception as e:
+#                 print(f"將 2D 特徵點 ({x}, {y}) 轉換為 3D 世界座標時出錯：{e}")
+
+#         feature_points_3d = np.array(feature_points_3d)
+
+#         # 與 PCD_FP_town01.txt 中的點進行匹配
+#         match_count = sum(
+#             1 for wp in feature_points_3d
+#             if any(np.linalg.norm(wp - tp) < 5 for tp in fp_town_points)
+#         )
+
+#         # 保存每張影像的 3D 特徵點
+#         np.savetxt(f"{dirname}/3D_FP_{timestamp}.txt", feature_points_3d, fmt="%.6f", delimiter=" ")
+#         print(f"3D 特徵點已保存於 {dirname}/3D_FP_{timestamp}.txt。")
+
+#         if match_count >= 4:
+#             # 輸出匹配數量
+#             print("")
+#             print(f"影像滿足條件!{dirname.split('/')[-1]}: 時間 {timestamp} 的影像匹配了 {match_count} 個 PCD_FP_town01.txt 中的點，開始處理數據。")
+#             print("")
+
+#             # 保存灰階深度影像
+#             save_depth_image(depth_image_data[0])
+
+#             # 處理並保存特徵點
+#             process_actor_for_fp_and_pointcloud(rgb_image_data[0], depth_image_data[0], intrinsic, transform, dirname, timestamp)
+
+#             # 從深度影像生成並保存 .ply 文件
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_ply_file(depth_image_data[0], intrinsic, transform, ply_filename)
+
+#             # 估計相機姿態
+#             try:
+#                 detected_fp_array = np.array(detected_fp, dtype=np.float32)
+#                 fp_town_points_array = np.array(fp_town_points[:len(detected_fp)], dtype=np.float32)
+#                 rvec, tvec = estimate_camera_pose_2d_3d(detected_fp_array, fp_town_points_array)
+
+#                 with open(f"{dirname}/pose_{timestamp}.txt", "w") as pose_file:
+#                     pose_file.write(f"旋轉向量：{rvec.tolist()}\n")
+#                     pose_file.write(f"平移向量：{tvec.tolist()}\n")
+#                 print(f"相機姿態已保存於 {dirname}/pose_{timestamp}.txt。")
+#             except Exception as e:
+#                 print(f"估計相機姿態時出錯：{e}")
+#         else:
+#             print(f"{dirname.split('/')[-1]}: 時間 {timestamp} 的影像不滿足條件，跳過。")
+
+#     # 銷毀相機
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+
+
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file):
+#     """
+#     捕捉 RGB 和深度影像，將 2D 特徵點轉換為 3D 世界座標，
+#     並與 FP_town01.txt 中的點進行匹配。
+#     """
+#     # 附加相機
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"跳過 {dirname.split('/')[-1]} 在時間 {timestamp} 的捕捉：未附加相機。")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # 加載 FP_town01.txt 中的點
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"載入 {fp_town_file} 錯誤：{e}")
+#         return
+
+#     # 用於捕捉數據的容器
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # 等待影像捕捉完成
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # 停止監聽相機
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"未能捕捉到 {dirname.split('/')[-1]} 在時間 {timestamp} 的影像。")
+#     else:
+#         depth_image = depth_image_data[0]
+#         intrinsic = get_camera_intrinsic(depth_camera)
+#         transform = depth_camera.get_transform()
+
+#         # print("相機內參數矩陣：")
+#         # print(intrinsic)
+
+#         # 將深度影像轉換為點雲
+#         depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
+#         if np.all(depth_array <= 0):
+#             print("深度影像未包含有效數據，點雲生成失敗。")
+#             return
+#         points = []
+
+#         matched_points = []  # 完整小數座標
+#         matched_int_set = set()  # 用於檢查整數座標是否已匹配過
+
+#         for y in range(depth_array.shape[0]):
+#             for x in range(depth_array.shape[1]):
+#                 depth = depth_array[y, x]
+#                 if depth <= 0:
+#                     continue
+#                 # 將像素點轉換為世界座標
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+#                 world_coords = transform.transform(carla.Location(
+#                     x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]
+#                 ))
+#                 points.append([world_coords.x, world_coords.y, world_coords.z])  # 將完整的小數座標加入點雲
+#                 # 匹配點
+#                 int_point = (int(world_coords.x), int(world_coords.y), int(world_coords.z))
+
+#                 # 檢查是否已經匹配過
+#                 if int_point in matched_int_set:
+#                     continue
+
+#                 # 比對 FP_town01.txt
+#                 distances = np.linalg.norm(fp_town_points - np.array(int_point), axis=1)
+#                 if np.any(distances < 0.01):  # 距離閾值
+#                     matched_points.append([world_coords.x, world_coords.y, world_coords.z])
+#                     matched_int_set.add(int_point)  # 記錄整數值避免重複
+
+#         # 確認 FP 數量是否大於 4
+#         if len(matched_points) > 4:
+#             print("")
+#             print(f"這張圖適合當KF！{dirname.split('/')[-1]} 在時間 {timestamp} 的影像匹配了 {len(matched_points)} 個特徵點，開始保存數據...")
+#             print("")
+
+#             # 保存灰階深度影像
+#             depth_array_normalized = (depth_array / depth_array.max() * 255).astype(np.uint8)
+#             cv2.imwrite(f"{dirname}/depth_{timestamp}.png", depth_array_normalized)
+
+#             # 保存 RGB 影像
+#             rgb_image = rgb_image_data[0]
+#             rgb_image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+
+#             # 保存點雲
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_pointcloud_to_ply(points, ply_filename)
+            
+
+#             # 保存完整小數座標特徵點
+#             matched_txt_filename = f"{dirname}/FP_{timestamp}.txt"
+#             np.savetxt(matched_txt_filename, matched_points, fmt="%.6f", delimiter=" ")
+#             print(f"完整特徵點已保存於 {matched_txt_filename}。")
+
+#             # 保存去重的整數座標特徵點
+#             matched_int_filename = f"{dirname}/FP_int_{timestamp}.txt"
+#             matched_int_points = np.array(list(matched_int_set))  # 將 set 轉為 numpy 陣列
+#             np.savetxt(matched_int_filename, matched_int_points, fmt="%d", delimiter=" ")
+#             print(f"整數特徵點已保存於 {matched_int_filename}。")
+
+#             # # 新增 EPnP 驗證
+#             # intrinsic = np.array([[fx, 0, cx],
+#             #                     [0, fy, cy],
+#             #                     [0, 0, 1]])
+#             validate_epnp(vehicle, matched_points, dirname, timestamp, intrinsic)
+
+#         else:
+#             print(f"時間 {timestamp} 的影像不滿足條件，跳過保存。")
+
+#     # 銷毀相機
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file, fp_town_new_file):
+#     """
+#     捕捉 RGB 和深度影像，將 2D 特徵點轉換為 3D 世界座標，
+#     並保存匹配的特徵點到全局文件 (FP_town01.txt) 和單張影像文件。
+#     """
+#     # 附加相機
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"跳過 {dirname.split('/')[-1]} 在時間 {timestamp} 的捕捉：未附加相機。")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # 加載 FP_town01.txt 中的點
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"載入 {fp_town_file} 錯誤：{e}")
+#         return
+
+#     # 用於捕捉數據的容器
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # 等待影像捕捉完成
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # 停止監聽相機
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"未能捕捉到 {dirname.split('/')[-1]} 在時間 {timestamp} 的影像。")
+#     else:
+#         depth_image = depth_image_data[0]
+#         intrinsic = get_camera_intrinsic(depth_camera)
+#         transform = depth_camera.get_transform()
+
+#         # 將深度影像轉換為點雲
+#         depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
+#         if np.all(depth_array <= 0):
+#             print("深度影像未包含有效數據，點雲生成失敗。")
+#             return
+#         points = []
+
+#         matched_points = []  # 完整小數座標
+#         matched_int_set = set()  # 用於檢查整數座標是否已匹配過
+
+#         for y in range(depth_array.shape[0]):
+#             for x in range(depth_array.shape[1]):
+#                 depth = depth_array[y, x]
+#                 if depth <= 0:
+#                     continue
+#                 # 將像素點轉換為世界座標
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+#                 world_coords = transform.transform(carla.Location(
+#                     x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]
+#                 ))
+#                 points.append([world_coords.x, world_coords.y, world_coords.z])  # 將完整的小數座標加入點雲
+#                 # 匹配點
+#                 int_point = (int(world_coords.x), int(world_coords.y), int(world_coords.z))
+
+#                 # 檢查是否已經匹配過
+#                 if int_point in matched_int_set:
+#                     continue
+
+#                 # 比對 FP_town01.txt
+#                 distances = np.linalg.norm(fp_town_points - np.array(int_point), axis=1)
+#                 if np.any(distances < 0.01):  # 距離閾值
+#                     matched_points.append([world_coords.x, world_coords.y, world_coords.z])
+#                     matched_int_set.add(int_point)  # 記錄整數值避免重複
+
+#         # 保存到全局文件 fp_town_new_file.txt
+#         with open(fp_town_new_file, "a") as f:
+#             for int_point in matched_int_set:
+#                 f.write(f"{int_point[0]} {int_point[1]} {int_point[2]}\n")
+
+#         # 確認 FP 數量是否大於 4
+#         if len(matched_points) > 4:
+#             print(f"這張圖適合當KF！影像匹配了 {len(matched_points)} 個特徵點，開始保存數據...")
+
+#             # 保存灰階深度影像
+#             depth_array_normalized = (depth_array / depth_array.max() * 255).astype(np.uint8)
+#             cv2.imwrite(f"{dirname}/depth_{timestamp}.png", depth_array_normalized)
+
+#             # 保存 RGB 影像
+#             rgb_image = rgb_image_data[0]
+#             rgb_image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+
+#             # 保存點雲
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_pointcloud_to_ply(points, ply_filename)
+
+#             # 保存完整小數座標特徵點
+#             matched_txt_filename = f"{dirname}/FP_{timestamp}.txt"
+#             np.savetxt(matched_txt_filename, matched_points, fmt="%.6f", delimiter=" ")
+#             print(f"完整特徵點已保存於 {matched_txt_filename}。")
+
+#             # 保存去重的整數座標特徵點
+#             matched_int_filename = f"{dirname}/FP_int_{timestamp}.txt"
+#             matched_int_points = np.array(list(matched_int_set))  # 將 set 轉為 numpy 陣列
+#             np.savetxt(matched_int_filename, matched_int_points, fmt="%d", delimiter=" ")
+#             print(f"整數特徵點已保存於 {matched_int_filename}。")
+
+#             # 新增 EPnP 驗證
+#             validate_epnp(vehicle, matched_points, dirname, timestamp, intrinsic)
+#         else:
+#             print(f"時間 {timestamp} 的影像不滿足條件，跳過保存。")
+
+#     # 銷毀相機
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file, fp_town_new_file):
+#     """
+#     捕捉 RGB 和深度影像，將 2D 特徵點轉換為 3D 世界座標，
+#     並保存匹配的特徵點到全局文件 (FP_town_new_file.txt) 和單張影像文件。
+#     """
+#     # 附加相機
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"跳過 {dirname.split('/')[-1]} 在時間 {timestamp} 的捕捉：未附加相機。")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # 加載 FP_town01.txt 中的點
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"載入 {fp_town_file} 錯誤：{e}")
+#         return
+
+#     # 用於捕捉數據的容器
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # 等待影像捕捉完成
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # 停止監聽相機
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"未能捕捉到 {dirname.split('/')[-1]} 在時間 {timestamp} 的影像。")
+#     else:
+#         depth_image = depth_image_data[0]
+#         intrinsic = get_camera_intrinsic(depth_camera)
+#         transform = depth_camera.get_transform()
+
+#         # 將深度影像轉換為點雲
+#         depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
+
+#         # 增強深度數據對比
+#         depth_array_normalized = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min())
+#         depth_array_normalized *= 1000.0  # 調整至有效深度範圍（例如 0-1000 米）
+
+#         if np.all(depth_array_normalized <= 0):
+#             print("深度影像未包含有效數據，點雲生成失敗。")
+#             return
+#         points = []
+
+#         matched_points = []  # 完整小數座標
+#         matched_int_set = set()  # 用於檢查整數座標是否已匹配過
+
+#         for y in range(depth_array_normalized.shape[0]):
+#             for x in range(depth_array_normalized.shape[1]):
+#                 depth = depth_array_normalized[y, x]
+#                 if depth <= 0:
+#                     continue
+#                 # 將像素點轉換為世界座標
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+#                 world_coords = transform.transform(carla.Location(
+#                     x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]
+#                 ))
+#                 points.append([world_coords.x, world_coords.y, world_coords.z])  # 將完整的小數座標加入點雲
+#                 # 匹配點
+#                 int_point = (int(world_coords.x), int(world_coords.y), int(world_coords.z))
+
+#                 # 檢查是否已經匹配過
+#                 if int_point in matched_int_set:
+#                     continue
+
+#                 # 比對 FP_town01.txt
+#                 distances = np.linalg.norm(fp_town_points - np.array(int_point), axis=1)
+#                 if np.any(distances < 0.01):  # 距離閾值
+#                     matched_points.append([world_coords.x, world_coords.y, world_coords.z])
+#                     matched_int_set.add(int_point)  # 記錄整數值避免重複
+
+#         # 保存到全局文件 fp_town_new_file.txt
+#         with open(fp_town_new_file, "a") as f:
+#             for int_point in matched_int_set:
+#                 f.write(f"{int_point[0]} {int_point[1]} {int_point[2]}\n")
+
+#         # 確認 FP 數量是否大於 4
+#         if len(matched_points) > 4:
+#             print(f"這張圖適合當KF！影像匹配了 {len(matched_points)} 個特徵點，開始保存數據...")
+
+#             # 保存灰階深度影像
+#             depth_array_gray = (depth_array_normalized / depth_array_normalized.max() * 255).astype(np.uint8)
+#             cv2.imwrite(f"{dirname}/depth_{timestamp}.png", depth_array_gray)
+
+#             # 保存 RGB 影像
+#             rgb_image = rgb_image_data[0]
+#             rgb_image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+
+#             # 保存點雲
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_pointcloud_to_ply(points, ply_filename)
+
+#             # 保存完整小數座標特徵點
+#             matched_txt_filename = f"{dirname}/FP_{timestamp}.txt"
+#             np.savetxt(matched_txt_filename, matched_points, fmt="%.6f", delimiter=" ")
+#             print(f"完整特徵點已保存於 {matched_txt_filename}。")
+
+#             # 保存去重的整數座標特徵點
+#             matched_int_filename = f"{dirname}/FP_int_{timestamp}.txt"
+#             matched_int_points = np.array(list(matched_int_set))  # 將 set 轉為 numpy 陣列
+#             np.savetxt(matched_int_filename, matched_int_points, fmt="%d", delimiter=" ")
+#             print(f"整數特徵點已保存於 {matched_int_filename}。")
+
+#             # 新增 EPnP 驗證
+#             validate_epnp(vehicle, matched_points, dirname, timestamp, intrinsic)
+#         else:
+#             print(f"時間 {timestamp} 的影像不滿足條件，跳過保存。")
+
+#     # 銷毀相機
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
+
+# def capture_images_with_feature_points(world, vehicle, dirname, timestamp, fp_town_file, fp_town_new_file):
+#     """
+#     捕捉 RGB 和深度影像，將 2D 特徵點轉換為 3D 世界座標，
+#     並保存匹配的特徵點到全局文件 (FP_town_new_file.txt) 和單張影像文件。
+#     """
+#     # 附加相機
+#     rgb_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.rgb')
+#     depth_camera = attach_camera_to_vehicle(world, vehicle, camera_type='sensor.camera.depth')
+#     lidar_camera = attach_lidar_to_vehicle(world, vehicle)
+
+#     if not rgb_camera or not depth_camera:
+#         print(f"跳過 {dirname.split('/')[-1]} 在時間 {timestamp} 的捕捉：未附加相機。")
+#         if rgb_camera:
+#             rgb_camera.destroy()
+#         if depth_camera:
+#             depth_camera.destroy()
+#         return
+
+#     # 加載 FP_town01.txt 中的點
+#     try:
+#         fp_town_points = np.loadtxt(fp_town_file, delimiter=' ')
+#     except Exception as e:
+#         print(f"載入 {fp_town_file} 錯誤：{e}")
+#         return
+
+#     # 用於捕捉數據的容器
+#     rgb_image_data = []
+#     depth_image_data = []
+
+#     def save_rgb_image(image):
+#         rgb_image_data.append(image)
+
+#     def save_depth_image(image):
+#         depth_image_data.append(image)
+
+#     rgb_camera.listen(save_rgb_image)
+#     depth_camera.listen(save_depth_image)
+
+#     # 等待影像捕捉完成
+#     for _ in range(20):
+#         world.tick()
+#         time.sleep(0.1)
+#         if rgb_image_data and depth_image_data:
+#             break
+
+#     # 停止監聽相機
+#     rgb_camera.stop()
+#     depth_camera.stop()
+
+#     if not (rgb_image_data and depth_image_data):
+#         print(f"未能捕捉到 {dirname.split('/')[-1]} 在時間 {timestamp} 的影像。")
+#     else:
+#         depth_image = depth_image_data[0]
+#         depth_array = np.array(depth_image.raw_data, dtype=np.float32).reshape((depth_image.height, depth_image.width, 4))[:, :, 0]
+
+#         # 增強深度數據對比
+#         depth_array_normalized = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min()) * 255.0
+#         depth_array_normalized = depth_array_normalized.astype(np.uint8)
+
+#         # 使用 Matplotlib 顯示深度影像，3 秒後自動關閉
+#         plt.imshow(depth_array_normalized, cmap='gray')
+#         plt.title("Depth Image")
+#         plt.axis('off')
+#         plt.draw()  # 繪製影像
+#         plt.pause(3)  # 停留 3 秒
+#         plt.close()  # 關閉視窗
+
+#         # 保存深度影像
+#         plt.imsave(f"{dirname}/depth_{timestamp}.png", depth_array_normalized, cmap='gray')
+#         print(f"深度影像已保存至 {dirname}/depth_{timestamp}.png。")
+
+#         # 繼續執行後續邏輯
+#         intrinsic = get_camera_intrinsic(depth_camera)
+#         transform = depth_camera.get_transform()
+
+#         if np.all(depth_array_normalized <= 0):
+#             print("深度影像未包含有效數據，點雲生成失敗。")
+#             return      
+        
+#         points = []
+
+#         matched_points = []  # 完整小數座標
+#         matched_int_set = set()  # 用於檢查整數座標是否已匹配過
+
+#         for y in range(depth_array.shape[0]):
+#             for x in range(depth_array.shape[1]):
+#                 depth = depth_array[y, x]
+#                 if depth <= 0:
+#                     continue
+#                 # 將像素點轉換為世界座標
+#                 pixel_coords = np.array([x, y, 1.0])
+#                 camera_coords = np.dot(np.linalg.inv(intrinsic), pixel_coords) * depth
+#                 world_coords = transform.transform(carla.Location(
+#                     x=camera_coords[0], y=camera_coords[1], z=camera_coords[2]
+#                 ))
+#                 points.append([world_coords.x, world_coords.y, world_coords.z])  # 將完整的小數座標加入點雲
+#                 # 匹配點
+#                 int_point = (int(world_coords.x), int(world_coords.y), int(world_coords.z))
+
+#                 # 檢查是否已經匹配過
+#                 if int_point in matched_int_set:
+#                     continue
+
+#                 # 比對 FP_town01.txt
+#                 distances = np.linalg.norm(fp_town_points - np.array(int_point), axis=1)
+#                 if np.any(distances < 0.01):  # 距離閾值
+#                     matched_points.append([world_coords.x, world_coords.y, world_coords.z])
+#                     matched_int_set.add(int_point)  # 記錄整數值避免重複
+
+#         # 保存到全局文件 fp_town_new_file.txt
+#         with open(fp_town_new_file, "a") as f:
+#             for int_point in matched_int_set:
+#                 f.write(f"{int_point[0]} {int_point[1]} {int_point[2]}\n")
+
+#         print(f"成功保存匹配點至 {fp_town_new_file}")
+
+#         # 確認 FP 數量是否大於 4
+#         if len(matched_points) > 4:
+#             print(f"這張圖適合當KF！影像匹配了 {len(matched_points)} 個特徵點，開始保存數據...")
+
+#             # 保存灰階深度影像
+#             depth_array_gray = (depth_array_normalized / depth_array_normalized.max() * 255).astype(np.uint8)
+#             cv2.imwrite(f"{dirname}/depth_{timestamp}.png", depth_array_gray)
+
+#             # 保存 RGB 影像
+#             rgb_image = rgb_image_data[0]
+#             rgb_image.save_to_disk(f"{dirname}/rgb_{timestamp}.png")
+
+#             # 保存點雲
+#             ply_filename = f"{dirname}/pointcloud_{timestamp}.ply"
+#             save_pointcloud_to_ply(points, ply_filename)
+
+#             # 保存完整小數座標特徵點
+#             matched_txt_filename = f"{dirname}/FP_{timestamp}.txt"
+#             np.savetxt(matched_txt_filename, matched_points, fmt="%.6f", delimiter=" ")
+#             print(f"完整特徵點已保存於 {matched_txt_filename}。")
+
+#             # 保存去重的整數座標特徵點
+#             matched_int_filename = f"{dirname}/FP_int_{timestamp}.txt"
+#             matched_int_points = np.array(list(matched_int_set))  # 將 set 轉為 numpy 陣列
+#             np.savetxt(matched_int_filename, matched_int_points, fmt="%d", delimiter=" ")
+#             print(f"整數特徵點已保存於 {matched_int_filename}。")
+
+#             # 新增 EPnP 驗證
+#             validate_epnp(vehicle, matched_points, dirname, timestamp, intrinsic)
+#         else:
+#             print(f"時間 {timestamp} 的影像不滿足條件，跳過保存。")
+
+#     # 銷毀相機
+#     if rgb_camera.is_alive:
+#         rgb_camera.destroy()
+#     if depth_camera.is_alive:
+#         depth_camera.destroy()
